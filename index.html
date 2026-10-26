@@ -34,7 +34,7 @@ button,input,select,textarea{font-family:inherit}button{touch-action:manipulatio
 :root[data-theme="dark"] .home-hero,:root[data-theme="dark"] .shopping-card{background:linear-gradient(130deg,rgba(47,66,58,.83),rgba(29,43,40,.8))}:root[data-theme="dark"] .app-top,:root[data-theme="dark"] .app-dock{background:rgba(25,39,35,.83)}:root[data-theme="dark"] .hero-action,:root[data-theme="dark"] .brand-mark,:root[data-theme="dark"] .bg-brand.text-white{color:#102b20}:root[data-theme="dark"] .wide-action{background:rgba(255,255,255,.03)}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @supports not (backdrop-filter:blur(1px)){.app-dock,.app-top{background:var(--sheet)}}
-</style></head>
+.sync-indicator{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;font-size:11px;color:var(--mute);flex-wrap:wrap}.sync-dot{height:6px;width:6px;border-radius:50%;background:#a6b6b0;flex-shrink:0}.sync-dot.saved{background:var(--brand)}.sync-dot.warning{background:#ba8135}</style></head>
 <body><div id="root"><p style="padding:24px">Cargando Mi Menú… Si esta pantalla no cambia, abre el archivo en un navegador compatible con JavaScript.</p></div>
 <script>/**
  * @license React
@@ -385,19 +385,19 @@ function validate(d){
   const meals=(d.meals||[]).filter(m=>m&&m.id&&m.name).map(m=>({...m,items:(m.items||[]).filter(it=>ids.has(it.ingId))}));
   return {...emptyData(),...d,version:VERSION,ingredients:ings,meals,plans:d.plans&&typeof d.plans==='object'?d.plans:{},lists:(d.lists||[]).filter(l=>l&&l.id&&Array.isArray(l.items)),categories:d.categories&&d.categories.length?d.categories:[...DEF_CATS]};
 }
-const Store={
-  load(){let raw;try{raw=localStorage.getItem(KEY)}catch(e){storageState.issue='El navegador no permite guardar datos. Exporta una copia antes de cerrar.';return null}
+const Store={scope:KEY,
+  load(){let raw;try{raw=localStorage.getItem(this.scope)}catch(e){storageState.issue='El navegador no permite guardar datos. Exporta una copia antes de cerrar.';return null}
     if(!raw)return null;
     try{return validate(JSON.parse(raw))}catch(e){
-      try{localStorage.setItem(KEY+':corrupt:'+Date.now(),raw)}catch(_){}
-      try{const prev=localStorage.getItem(KEY+':previous');if(prev){const recovered=validate(JSON.parse(prev));storageState.issue='Se recuperó la versión guardada anterior. Revisa tus datos y exporta una copia.';return recovered}}catch(_){}
+      try{localStorage.setItem(this.scope+':corrupt:'+Date.now(),raw)}catch(_){}
+      try{const prev=localStorage.getItem(this.scope+':previous');if(prev){const recovered=validate(JSON.parse(prev));storageState.issue='Se recuperó la versión guardada anterior. Revisa tus datos y exporta una copia.';return recovered}}catch(_){}
       storageState.blocked=true;storageState.issue='Los datos guardados no se pueden leer. Se han protegido frente a sobrescrituras. Restaura una copia desde Ajustes.';return null;
     }
   },
   save(d){if(storageState.blocked)return false;
-    try{const raw=JSON.stringify(d),old=localStorage.getItem(KEY);if(old===raw)return true;
-      if(old){try{validate(JSON.parse(old));localStorage.setItem(KEY+':previous',old)}catch(e){}}
-      localStorage.setItem(KEY,raw);return true
+    try{const raw=JSON.stringify(d),old=localStorage.getItem(this.scope);if(old===raw)return true;
+      if(old){try{validate(JSON.parse(old));localStorage.setItem(this.scope+':previous',old)}catch(e){}}
+      localStorage.setItem(this.scope,raw);return true
     }catch(e){return false}},
   backup(d){return JSON.stringify({app:'mimenu',version:VERSION,exportedAt:new Date().toISOString(),data:d})}
 };
@@ -476,9 +476,12 @@ function downloadBackup(d){
   const a=document.createElement('a');a.href=url;a.download='mimenu-'+ymd(new Date())+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
   const date=new Date().toISOString();try{localStorage.setItem(KEY+':lastExport',date)}catch(e){}return date;
 }
+const OPEN_EDITORS=new Set();
 function useGuardedClose(value,onClose,ask){
+  const editorId=useRef(uid());
   const initial=useRef(JSON.stringify(value));const dirty=initial.current!==JSON.stringify(value);
   useEffect(()=>{if(!dirty)return;const warn=e=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[dirty]);
+  useEffect(()=>{if(!dirty)return;OPEN_EDITORS.add(editorId.current);return()=>OPEN_EDITORS.delete(editorId.current)},[dirty]);
   return async()=>{if(!dirty||await ask('Hay cambios sin guardar. ¿Descartarlos y cerrar?'))onClose()};
 }
 
@@ -504,13 +507,14 @@ function Inicio({d,setTab,setWeek,openSettings}){
 /* Supabase is optional. No network calls until a project is configured. */
 const DEFAULT_CLOUD_CONFIG={url:'https://rkjdqpdkncjsudbgthau.supabase.co',key:'sb_publishable_nUBRIpz9Ea3bKb-jjfbc0w_aYt-luTq'};
 const CLOUD_KEY=KEY+':cloud';let cloudInstance=null,cloudIdentity='';
+function cloudFetch(input,options={}){const controller=new AbortController(),abort=()=>controller.abort(),timer=setTimeout(abort,15000);if(options.signal){if(options.signal.aborted)abort();else options.signal.addEventListener('abort',abort,{once:true})}return fetch(input,{...options,signal:controller.signal}).finally(()=>{clearTimeout(timer);options.signal?.removeEventListener('abort',abort)})}
 function readCloudConfig(){try{return JSON.parse(localStorage.getItem(CLOUD_KEY))||DEFAULT_CLOUD_CONFIG}catch(e){return DEFAULT_CLOUD_CONFIG}}
 function cloudClient(config){
   const identity=config.url+'|'+config.key;
   if(cloudInstance&&cloudIdentity===identity)return cloudInstance;
   if(cloudInstance)cloudInstance.auth.stopAutoRefresh();
   cloudIdentity=identity;
-  cloudInstance=window.supabase.createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  cloudInstance=window.supabase.createClient(config.url,config.key,{global:{fetch:cloudFetch},auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
   return cloudInstance;
 }
 function validCloudConfig(url,key){
@@ -519,51 +523,112 @@ function validCloudConfig(url,key){
   if(!/^sb_publishable_[A-Za-z0-9_-]+$/.test(key))throw new Error('Usa la clave pública sb_publishable_… Nunca una secret o service_role.');
   return {url:parsed.origin,key};
 }
-function CloudPanel({d,up,ask}){
-  const[config,setConfig]=useState(readCloudConfig),[url,setUrl]=useState(()=>readCloudConfig()?.url||''),[key,setKey]=useState(()=>readCloudConfig()?.key||'');
-  const[email,setEmail]=useState(''),[password,setPassword]=useState(''),[session,setSession]=useState(null),[busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[remote,setRemote]=useState(null);
-  const alive=useRef(true);useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
-  const client=config?cloudClient(config):null;
+/* One private journal per account. Server revision is a compare-and-swap guard. */
+const stableData=v=>JSON.stringify(v,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(k=>[k,value[k]])):value);
+class AutoSync {
+  constructor({client,project,onData,onStatus,local,storage=localStorage,online=()=>navigator.onLine,canApply=()=>true}){
+    Object.assign(this,{client,project,onData,onStatus,storage,online,canApply});this.data=local;this.user=null;this.generation=0;this.serial=0;this.busy=false;this.pending=false;this.base=null;this.conflict=null;this.timer=null;
+  }
+  status(state,message){this.onStatus({state,message,user:this.user,pending:this.pending,updatedAt:this.updatedAt||null,conflict:!!this.conflict})}
+  persist(){try{this.storage.setItem(this.key,JSON.stringify({data:this.data,base:this.base,pending:this.pending,updatedAt:this.updatedAt||null}));return true}catch(e){this.status('error','No se pudo guardar la copia local. Exporta una copia antes de cerrar.');return false}}
+  async account(user){
+    if(this.user?.id===user?.id)return;
+    const previous=this.user;this.generation++;clearTimeout(this.timer);this.busy=false;this.user=user;this.conflict=null;this.serial=0;this.blocked=false;
+    if(!user){this.pending=false;this.base=null;const raw=this.storage.getItem(KEY);let guest;try{guest=raw?validate(JSON.parse(raw)):withCatalog(emptyData())}catch(e){guest=withCatalog(emptyData())}Store.scope=KEY;this.data=guest;this.onData(guest);this.status('local','Solo en este dispositivo');return}
+    this.key=KEY+':sync:'+this.project+':'+user.id;Store.scope=this.key+':data';storageState.blocked=false;storageState.issue='';
+    let cached=null;try{const raw=this.storage.getItem(this.key);if(raw){cached=JSON.parse(raw);cached.data=validate(cached.data)}}catch(e){this.blocked=true;storageState.blocked=true;this.status('error','La copia local de esta cuenta no se puede leer. No se sobrescribirá.');return}
+    if(cached){this.data=cached.data;this.base=cached.base;this.pending=!!cached.pending;this.updatedAt=cached.updatedAt}
+    else {
+      const ownerKey=KEY+':legacyOwner:'+this.project,owner=this.storage.getItem(ownerKey);
+      const useLegacy=!previous&&(!owner||owner===user.id);
+      this.data=useLegacy?this.data:withCatalog(emptyData());this.base=null;this.pending=true;
+      try{if(useLegacy){this.storage.setItem(KEY+':legacyBackup:'+this.project+':'+user.id,JSON.stringify(this.data));this.storage.setItem(ownerKey,user.id)}}catch(e){this.status('error','No se pudo proteger la copia anterior. Exporta una copia antes de continuar.');return}
+    }
+    if(!this.persist())return;
+    // Logged-out screens must not display a signed-in user's previous cache.
+    try{this.storage.setItem(KEY,JSON.stringify(withCatalog(emptyData())))}catch(e){}
+    this.onData(this.data);this.status('loading','Comprobando tus datos…');await this.sync();
+  }
+  edit(data){this.data=data;this.serial++;if(!this.user)return;if(this.blocked){this.status('error','La copia local está dañada. Exporta tus cambios antes de continuar.');return}this.pending=true;if(!this.persist())return;if(this.conflict){this.status('conflict','Hay cambios en dos dispositivos. Revisa cuál conservar.');return}this.status(this.online()?'pending':'offline',this.online()?'Cambios pendientes':'Sin conexión · cambios pendientes');clearTimeout(this.timer);this.timer=setTimeout(()=>this.sync(),900)}
+  async read(metadataOnly=false){const {data,error}=await this.client.from('mimenu_snapshots').select(metadataOnly?'revision,updated_at':'data,revision,updated_at').eq('user_id',this.user.id).maybeSingle();if(error)throw error;return data}
+  apply(row){const next=validate(row.data);next.catalogVersion=1;this.data=next;this.base=row.revision;this.pending=false;this.updatedAt=row.updated_at;this.conflict=null;this.persist();this.onData(next)}
+  async sync(){
+    if(!this.user||this.busy||this.conflict||this.blocked)return;
+    if(!this.online()){this.status('offline',this.pending?'Sin conexión · cambios pendientes':'Sin conexión · copia local');return}
+    const generation=this.generation;this.busy=true;this.status('syncing','Sincronizando…');
+    try{
+      const metadata=await this.read(true);if(generation!==this.generation)return;
+      const remote=metadata&&(this.base===null||metadata.revision!==this.base)?await this.read():metadata;
+      if(generation!==this.generation)return;
+      if(remote?.data)remote.data=validate(remote.data);
+      if(this.base===null){
+        const meaningful=stableData(this.data)!==stableData(withCatalog(emptyData()));
+        if(remote&&meaningful&&stableData(this.data)!==stableData(remote.data)){this.conflict=remote;this.status('conflict','Hay una copia local distinta de la nube. Elige cuál conservar.');return}
+        if(remote){this.apply(remote);this.status('saved','Guardado y sincronizado');return}
+        this.base=0;this.pending=true;
+      }
+      if(this.pending){
+        if((remote?.revision||0)!==this.base){
+          if(remote&&stableData(this.data)===stableData(remote.data)){this.apply(remote);this.status('saved','Guardado y sincronizado');return}
+          this.conflict=remote||{data:null,revision:0};this.status('conflict','Hay cambios en dos dispositivos. Revisa cuál conservar.');return;
+        }
+        const serial=this.serial,snapshot=JSON.parse(JSON.stringify(this.data));validate(snapshot);
+        const {data,error}=await this.client.rpc('mimenu_save_snapshot',{p_data:snapshot,p_expected_revision:this.base});
+        if(generation!==this.generation)return;
+        if(error){if(error.code==='40001'){this.conflict={needsRead:true};this.status('conflict','Otro dispositivo acaba de guardar. Revisa los cambios.');return}throw error}
+        this.base=data.revision;this.updatedAt=data.updated_at;this.pending=this.serial!==serial;this.persist();this.status(this.pending?'pending':'saved',this.pending?'Cambios pendientes':'Guardado y sincronizado');
+      }else{
+        if(!remote&&this.base>0){this.conflict={data:null,revision:0};this.status('conflict','La copia de la nube ya no está disponible. Tu copia local se conserva.');return}
+        if(remote&&remote.revision!==this.base&&!this.canApply()){this.status('waiting','Hay cambios nuevos; termina de editar para recibirlos.');return}
+        if(remote&&remote.revision!==this.base)this.apply(remote);
+        this.status('saved','Guardado y sincronizado');
+      }
+    }catch(e){if(generation===this.generation)this.status(this.online()?'error':'offline',this.online()?'No se pudo sincronizar. Se reintentará; tu copia local se conserva.':'Sin conexión · cambios pendientes')}
+    finally{if(generation===this.generation){this.busy=false;if(this.pending&&!this.conflict&&this.online())this.timer=setTimeout(()=>this.sync(),3000)}}
+  }
+  async resolve(choice){
+    if(!this.user||!this.conflict)return;
+    const generation=this.generation;const row=await this.read();if(generation!==this.generation)return;
+    if(choice==='remote'){
+      if(!row)throw new Error('No existe una copia en la nube. Conserva la local.');
+      this.storage.setItem(this.key+':conflictBackup:'+Date.now(),JSON.stringify(this.data));this.apply(row);this.status('saved','Guardado y sincronizado');
+    }else{this.base=row?.revision||0;this.conflict=null;this.pending=true;this.persist();await this.sync()}
+  }
+  dispose(){this.generation++;clearTimeout(this.timer);this.user=null}
+}
+
+function useAutoCloud(d,setD,dataRef){
+  const [config,setConfig]=useState(readCloudConfig),[sync,setSync]=useState({state:'local',message:'Solo en este dispositivo',user:null,pending:false});
+  const engine=useRef(null),client=config?cloudClient(config):null;
   useEffect(()=>{
     if(!client)return;let active=true;
-    client.auth.getSession().then(({data,error})=>{if(active){if(error)setNotice(error.message);setSession(data?.session||null)}}).catch(()=>{if(active)setNotice('No se pudo recuperar la sesión. Puedes seguir usando la copia local.')});
-    const {data}=client.auth.onAuthStateChange((_event,next)=>{if(active){setSession(next);setRemote(null)}});
-    return()=>{active=false;data.subscription.unsubscribe()};
+    const controller=new AutoSync({client,project:new URL(config.url).hostname,local:dataRef.current,canApply:()=>OPEN_EDITORS.size===0,onData:next=>{if(active){dataRef.current=next;setD(next)}},onStatus:state=>{if(active)setSync(state)}});engine.current=controller;
+    const account=next=>{if(active)setTimeout(()=>{if(active)controller.account(next?.user||null).catch(()=>controller.status('error','No se pudo abrir la copia de esta cuenta.'))},0)};
+    const {data}=client.auth.onAuthStateChange((_event,next)=>account(next));
+    client.auth.getSession().then(({data,error})=>{if(error)controller.status('error','No se pudo recuperar la sesión.');else account(data.session)}).catch(()=>controller.status('error','No se pudo recuperar la sesión.'));
+    const refresh=()=>{if(document.visibilityState!=='hidden')controller.sync()};
+    const offline=()=>controller.status('offline',controller.pending?'Sin conexión · cambios pendientes':'Sin conexión · copia local');
+    window.addEventListener('online',refresh);window.addEventListener('offline',offline);window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
+    const interval=setInterval(refresh,10000);
+    return()=>{active=false;controller.dispose();data.subscription.unsubscribe();clearInterval(interval);window.removeEventListener('online',refresh);window.removeEventListener('offline',offline);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh)};
   },[client]);
-  async function fetchRemote(){
-    const {data,error}=await client.from('mimenu_snapshots').select('data,revision,updated_at').eq('user_id',session.user.id).maybeSingle();
-    if(error)throw error;return data;
-  }
-  useEffect(()=>{if(!session||!client)return;let active=true;fetchRemote().then(row=>{if(active){setRemote(row?{revision:row.revision,updated_at:row.updated_at}:null);setNotice(row?'Hay una copia en Supabase. Elige subir o recuperar.':'Todavía no hay una copia en Supabase para esta cuenta.')}}).catch(()=>{if(active)setNotice('No se pudo leer la nube. Comprueba la conexión y que has ejecutado el archivo SQL.')});return()=>{active=false}},[session?.user?.id,client]);
-  async function run(action){setBusy(true);setNotice('');try{await action()}catch(e){if(alive.current)setNotice(e.code==='40001'?'La copia de la nube ha cambiado en otro dispositivo. Recupérala antes de volver a guardar.':e.message||'No se pudo completar. Tus datos locales se conservan.')}finally{if(alive.current)setBusy(false)}}
-  function connect(){try{const next=validCloudConfig(url.trim(),key.trim());localStorage.setItem(CLOUD_KEY,JSON.stringify(next));setConfig(next);setSession(null);setRemote(null);setNotice('Proyecto configurado. Inicia sesión para guardar tus datos.')}catch(e){setNotice(e.message)}}
-  const signIn=()=>run(async()=>{const {error}=await client.auth.signInWithPassword({email:email.trim(),password});if(error)throw error;if(alive.current){setPassword('');setNotice('Sesión iniciada. Los datos locales no se han sustituido.')}});
-  const signUp=()=>run(async()=>{
-    if(password.length<8)throw new Error('Utiliza una contraseña de al menos ocho caracteres.');
-    const redirect=location.protocol==='https:'?location.origin+location.pathname:'https://cristiancontreras1998.github.io/Comidas/';
-    const {data,error}=await client.auth.signUp({email:email.trim(),password,options:{emailRedirectTo:redirect}});if(error)throw error;
-    if(alive.current){setPassword('');setNotice(data.session?'Cuenta creada. Ya puedes guardar.':'Revisa tu correo y confirma la cuenta; después vuelve e inicia sesión. Si ya existía, utiliza Iniciar sesión.')}
-  });
-  const upload=()=>run(async()=>{
-    const current=await fetchRemote(),expected=current?.revision||0;
-    if(!(await ask(current?'¿Sustituir la copia de Supabase con los datos de este dispositivo? Las modificaciones hechas en otro dispositivo podrían perderse.':'¿Guardar los datos de este dispositivo en tu cuenta de Supabase?')))return;
-    const snapshot=JSON.parse(JSON.stringify(d));validate(snapshot);
-    const {data,error}=await client.rpc('mimenu_save_snapshot',{p_data:snapshot,p_expected_revision:expected});if(error)throw error;
-    if(alive.current){setRemote(data);setNotice('Copia guardada en Supabase. Los cambios posteriores se guardan localmente hasta que vuelvas a subirlos.')}
-  });
-  const download=()=>run(async()=>{
-    const row=await fetchRemote();if(!row)throw new Error('Todavía no existe una copia en Supabase. Guarda primero desde el dispositivo que tiene tus datos.');
-    const restored=validate(row.data);
-    if(!(await ask('La copia contiene '+restored.ingredients.length+' ingredientes, '+restored.meals.length+' comidas y '+restored.lists.length+' listas. ¿Sustituir los datos de este dispositivo? Exporta antes una copia local si quieres conservarlos.')))return;
-    restored.catalogVersion=1;storageState.blocked=false;storageState.issue='';up(n=>{Object.keys(n).forEach(k=>delete n[k]);Object.assign(n,restored)});
-    if(alive.current){setRemote({revision:row.revision,updated_at:row.updated_at});setNotice('Copia recuperada. Ya puedes seguir trabajando en este dispositivo.')}
-  });
-  return html`<section><h3 className="font-semibold mb-1">Cuenta y copia en Supabase</h3><p className="text-sm text-mute mb-3">Guarda tus datos en tu cuenta y recupéralos desde otro dispositivo. La copia local sigue disponible sin conexión.</p>
-    <details className="mb-3" open=${!config}><summary className="text-sm text-brand font-semibold cursor-pointer">${config?'Cambiar proyecto':'Conectar mi proyecto'}</summary><div className="space-y-2 mt-3"><${Field} label="Project URL"><input className=${IN} type="url" value=${url} onChange=${e=>setUrl(e.target.value)} placeholder="https://tu-proyecto.supabase.co"/><//><${Field} label="Clave pública publishable"><input className=${IN} value=${key} onChange=${e=>setKey(e.target.value)} placeholder="sb_publishable_…" autoComplete="off"/><//><p className="text-xs text-mute">Es una clave pública. No pegues contraseñas de Supabase ni claves secret o service_role.</p><button className=${SEC+' w-full'} disabled=${busy||!url||!key} onClick=${connect}>Guardar conexión</button></div></details>
-    ${config&&!session&&html`<div className="space-y-3"><p className="text-xs text-mute">Esta cuenta pertenece a Mi Menú. Tu cuenta del panel de Supabase no te da acceso automáticamente.</p><${Field} label="Correo de Mi Menú"><input type="email" className=${IN} value=${email} onChange=${e=>setEmail(e.target.value)} autoComplete="email"/><//><${Field} label="Contraseña de Mi Menú"><input type="password" className=${IN} value=${password} onChange=${e=>setPassword(e.target.value)} autoComplete="current-password"/><//><div className="flex gap-2"><button className=${PRI+' flex-1'} disabled=${busy||!email||!password} onClick=${signIn}>Iniciar sesión</button><button className=${GHOST+' flex-1'} disabled=${busy||!email||password.length<8} onClick=${signUp}>Crear cuenta</button></div></div>`}
-    ${session&&html`<div className="space-y-2"><p className="text-sm">Sesión de ${session.user.email}</p>${remote?.updated_at&&html`<p className="text-xs text-mute">Última copia en nube: ${new Date(remote.updated_at).toLocaleString('es-ES')}</p>`}<button className=${PRI+' w-full'} disabled=${busy} onClick=${upload}>Guardar este dispositivo en Supabase</button><button className=${SEC+' w-full'} disabled=${busy} onClick=${download}>Recuperar copia de Supabase</button><button className=${GHOST+' w-full'} disabled=${busy} onClick=${()=>run(async()=>{const {error}=await client.auth.signOut();if(error)throw error;setSession(null);setNotice('Sesión cerrada. La copia local sigue en este navegador.')})}>Cerrar sesión</button></div>`}
-    ${busy&&html`<p role="status" className="text-sm text-mute mt-3">Conectando…</p>`}${notice&&html`<p role="status" className="text-sm text-brand mt-3">${notice}</p>`}<p className="text-xs text-mute mt-3">La sincronización es manual: sube los cambios al terminar y recupéralos antes de editar en otro dispositivo. No se mezclan ni sustituyen datos automáticamente.</p>
-  </section>`;
+  return {...sync,client,engine,configure:next=>{localStorage.setItem(CLOUD_KEY,JSON.stringify(next));setConfig(next)},resolve:choice=>engine.current?.resolve(choice),retry:()=>engine.current?.sync()};
+}
+
+function CloudPanel({cloud,ask}){
+  const config=readCloudConfig(),[url,setUrl]=useState(config?.url||''),[key,setKey]=useState(config?.key||''),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  async function run(fn){setBusy(true);setNotice('');try{await fn()}catch(e){setNotice(e.message||'No se pudo completar.')}finally{setBusy(false)}}
+  const login=()=>run(async()=>{const {error}=await cloud.client.auth.signInWithPassword({email:email.trim(),password});if(error)throw error;setPassword('')});
+  const signup=()=>run(async()=>{const redirect=location.protocol==='https:'?location.origin+location.pathname:'https://cristiancontreras1998.github.io/Comidas/';const {data,error}=await cloud.client.auth.signUp({email:email.trim(),password,options:{emailRedirectTo:redirect}});if(error)throw error;setPassword('');setNotice(data.session?'Cuenta creada.':'Confirma el correo y después inicia sesión.')});
+  const resolve=choice=>run(async()=>{if(await ask(choice==='remote'?'¿Usar los datos de la nube? Se conservará una copia local de los cambios pendientes.':'¿Conservar los datos de este dispositivo en la nube? Esta elección sustituirá los datos del otro dispositivo.'))await cloud.resolve(choice)});
+  return html`<section><h3 className="font-semibold mb-1">Cuenta y sincronización</h3><p className="text-sm text-mute mb-3">Con tu cuenta, los cambios se guardan automáticamente y llegan a tus otros dispositivos. Sin conexión puedes seguir trabajando.</p>
+  ${cloud.user?html`<p className="text-sm">Sesión de ${cloud.user.email}</p><p role="status" className="text-sm text-brand mt-2">${cloud.message}</p>${cloud.updatedAt&&html`<p className="text-xs text-mute mt-1">Última sincronización: ${new Date(cloud.updatedAt).toLocaleString('es-ES')}</p>`}
+  ${cloud.conflict&&html`<div className="space-y-2 mt-3"><button className=${PRI+' w-full'} disabled=${busy} onClick=${()=>resolve('remote')}>Usar datos de la nube</button><button className=${GHOST+' w-full'} disabled=${busy} onClick=${()=>resolve('local')}>Conservar los de este dispositivo</button></div>`}
+  ${cloud.state==='error'&&html`<button className=${SEC+' w-full mt-3'} onClick=${cloud.retry}>Reintentar sincronización</button>`}
+  <button className=${GHOST+' w-full mt-3'} disabled=${busy} onClick=${()=>run(async()=>{if((cloud.pending||cloud.conflict)&&!(await ask('Hay cambios pendientes de subir. Se conservarán para esta cuenta en este navegador. ¿Cerrar sesión igualmente?')))return;const {error}=await cloud.client.auth.signOut();if(error)throw error})}>Cerrar sesión</button><p className="text-xs text-mute mt-2">Al cerrar sesión se ocultan los datos de esta cuenta. Los cambios sin enviar se conservan en este navegador hasta que vuelvas a entrar.</p>`:
+  html`<div className="space-y-3"><p className="text-xs text-mute">Inicia sesión con tu cuenta de Mi Menú.</p><${Field} label="Correo de Mi Menú"><input className=${IN} type="email" autoComplete="email" value=${email} onChange=${e=>setEmail(e.target.value)}/><//><${Field} label="Contraseña de Mi Menú"><input className=${IN} type="password" autoComplete="current-password" value=${password} onChange=${e=>setPassword(e.target.value)}/><//><div className="flex gap-2"><button className=${PRI+' flex-1'} disabled=${busy||!email||!password||!cloud.client} onClick=${login}>Iniciar sesión</button><button className=${GHOST+' flex-1'} disabled=${busy||!email||password.length<8||!cloud.client} onClick=${signup}>Crear cuenta</button></div></div>`}
+  ${notice&&html`<p role="status" className="text-sm text-brand mt-3">${notice}</p>`}
+  ${!cloud.user&&html`<details className="mt-4"><summary className="text-sm text-brand cursor-pointer">Conexión con Supabase</summary><div className="space-y-2 mt-3"><input aria-label="Project URL" className=${IN} value=${url} onChange=${e=>setUrl(e.target.value)}/><input aria-label="Clave pública" className=${IN} value=${key} onChange=${e=>setKey(e.target.value)}/><button className=${SEC+' w-full'} onClick=${()=>run(async()=>cloud.configure(validCloudConfig(url.trim(),key.trim())))}>Guardar conexión</button></div></details>`}</section>`;
 }
 
 /* ========== UI ========== */
@@ -783,7 +848,7 @@ function Compra({d,up,ask,flash,week,setWeek,showText}){
 }
 
 /* ---------- Ajustes / copia de seguridad ---------- */
-function Settings({d,up,ask,flash,onClose,showText}){
+function Settings({d,up,ask,flash,onClose,showText,cloud}){
   const[txt,setTxt]=useState(''),[cat,setCat]=useState(''),[exported,setExported]=useState(lastExport);
   const used=new Set(d.ingredients.map(i=>i.cat));
   const exp=()=>{try{setExported(downloadBackup(d));flash('Copia preparada para descargar. Comprueba que se ha guardado en Archivos o Descargas.')}catch(e){flash('No se pudo descargar. Usa Copiar copia.')}};
@@ -792,7 +857,7 @@ function Settings({d,up,ask,flash,onClose,showText}){
       if(await ask('Copia con '+v.ingredients.length+' ingredientes, '+v.meals.length+' comidas y '+v.lists.length+' listas. ¿Sustituir todos tus datos actuales?')){storageState.blocked=false;storageState.issue='';v.catalogVersion=1;up(n=>{Object.keys(n).forEach(k=>delete n[k]);Object.assign(n,v)});flash('Datos restaurados');onClose()}}
     catch(e){flash(e instanceof SyntaxError?'El texto no es una copia válida':e.message)}};
   return html`<${Sheet} title="Ajustes" onClose=${onClose}><div className="space-y-6">
-    <${ThemePicker}/><${CloudPanel} d=${d} up=${up} ask=${ask}/><section><h3 className="font-semibold mb-1">Copia de seguridad</h3><p className="text-sm text-mute mb-3">Tus datos se guardan solo en este dispositivo. Exporta una copia de vez en cuando y guárdala en Notas o Archivos.</p>
+    <${ThemePicker}/><${CloudPanel} cloud=${cloud} ask=${ask}/><section><h3 className="font-semibold mb-1">Copia de seguridad</h3><p className="text-sm text-mute mb-3">Exporta una copia adicional para guardarla fuera de la aplicación. Con sesión iniciada, también se sincroniza automáticamente con tu cuenta.</p>
       <button className=${PRI+' w-full'} onClick=${exp}>Descargar copia de seguridad</button>
       <button className=${SEC+' w-full mt-2'} onClick=${copyBackup}>Copiar copia como texto</button>
       <p className="text-xs text-mute mt-2">${exported?'Última exportación solicitada: '+new Date(exported).toLocaleString('es-ES'):'Todavía no has exportado una copia.'} Comprueba siempre que el archivo se ha guardado. La copia interna anterior no sustituye una copia externa.</p>
@@ -812,18 +877,21 @@ function App(){
   const[tab,setTab]=useState(()=>{try{return (TABS.some(t=>t[0]===localStorage.getItem(KEY+':tab'))?localStorage.getItem(KEY+':tab'):'inicio')}catch(e){return'inicio'}});
   const[week,setWeek]=useState(()=>ymd(monday(new Date())));
   const[dlg,setDlg]=useState(null),[toast,setToast]=useState(null),[settings,setSettings]=useState(false),[text,setText]=useState(null);
-  const up=f=>setD(p=>{const n=JSON.parse(JSON.stringify(p));f(n);return n});
+  const dataRef=useRef(d);dataRef.current=d;
+  const cloud=useAutoCloud(d,setD,dataRef);
+  const up=f=>{const n=JSON.parse(JSON.stringify(dataRef.current));f(n);dataRef.current=n;setD(n);cloud.engine.current?.edit(n)};
   const ask=msg=>new Promise(r=>setDlg({msg,r}));
   const flash=(t,undo=null)=>{setToast({message:t,undo});clearTimeout(window.__t);window.__t=setTimeout(()=>setToast(null),undo?12000:3500)};
   useEffect(()=>{setSaveError(Store.save(d)?'':(storageState.issue||'No se han guardado los últimos cambios. Exporta una copia antes de cerrar.'));setStorageNotice(storageState.issue)},[d]);
   useEffect(()=>{try{localStorage.setItem(KEY+':tab',tab)}catch(e){}window.scrollTo(0,0)},[tab]);
   useEffect(()=>{try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist().catch(()=>{})}catch(e){}},[]);
-  useEffect(()=>{if(!saveError)return;const warn=e=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[saveError]);
+  useEffect(()=>{if(!saveError&&!cloud.pending)return;const warn=e=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[saveError,cloud.pending]);
   useEffect(()=>{if(location.hash.includes('access_token=')||location.search.includes('code=')){const config=readCloudConfig();if(config)cloudClient(config).auth.getSession().then(({error})=>{if(error)flash('No se pudo completar la confirmación. Inicia sesión desde Ajustes.');else flash('Correo confirmado. Puedes abrir tu cuenta en Ajustes.')}).catch(()=>flash('Abre Ajustes para completar el inicio de sesión.'))}},[]);
-  const p={d,up,ask,flash,week,setWeek,showText:setText};
+  const p={d,up,ask,flash,week,setWeek,showText:setText,cloud};
   const close=v=>{dlg.r(v);setDlg(null)};
   return html`<div className="app-shell">
     ${(saveError||storageNotice)&&html`<div role="alert" className="bg-amber-100 text-amber-800 p-4 text-sm border-b border-line"><p>${saveError||storageNotice}</p><div className="flex gap-2 mt-2"><button className="underline font-semibold" onClick=${()=>setSettings(true)}>Ajustes y copia</button><button className="underline font-semibold" onClick=${()=>{if(Store.save(d)){setSaveError('');setStorageNotice('')}else setSaveError(storageState.issue||'Sigue sin poder guardarse. Descarga una copia.')}}>Reintentar guardado</button></div></div>`}
+    ${cloud.user&&html`<div className="sync-indicator" role="status"><span className=${'sync-dot '+(cloud.state==='saved'?'saved':cloud.state==='conflict'||cloud.state==='error'?'warning':'')} aria-hidden="true"></span><span>${cloud.message}</span>${(cloud.conflict||cloud.state==='error')&&html`<button className="text-brand underline font-semibold" onClick=${()=>setSettings(true)}>Revisar</button>`}</div>`}
     ${tab==='inicio'&&html`<${Inicio} d=${d} setTab=${setTab} setWeek=${setWeek} openSettings=${()=>setSettings(true)}/>`}
     ${tab==='ingredientes'&&html`<${Ingredientes} ...${p} openSettings=${()=>setSettings(true)}/>`}
     ${tab==='comidas'&&html`<${Comidas} ...${p}/>`}
